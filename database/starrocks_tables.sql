@@ -1,0 +1,591 @@
+-- Init database
+CREATE DATABASE IF NOT EXISTS ods;
+USE ods;
+-- Transactions Table and Materialized View ------------------------------
+CREATE TABLE transactions (
+  order_id INT,
+  transaction_type VARCHAR(100),
+  amount DECIMAL(15, 2),
+  status VARCHAR(100),
+  created_at DATETIME,
+  ttl DATETIME DEFAULT CURRENT_TIMESTAMP
+) DUPLICATE KEY(order_id, transaction_type) PARTITION BY RANGE (date_trunc('day', created_at)) (
+  PARTITION p20240601
+  VALUES LESS THAN ("2024-06-02"),
+    PARTITION pmax
+  VALUES LESS THAN MAXVALUE
+) DISTRIBUTED BY HASH(order_id) BUCKETS 4 PROPERTIES ("replication_num" = "1");
+CREATE TABLE kafka_transactions (message STRING) ENGINE = OLAP PROPERTIES ("replication_num" = "1") DUPLICATE KEY(message) DISTRIBUTED BY HASH(message) BUCKETS 1 PROPERTIES (
+  "enable_kafka_ingestion" = "true",
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.transactions",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_format" = "json",
+  "kafka_json_root" = "$.after"
+);
+-- Orders Table and Materialized View ---------------------------------
+CREATE TABLE IF NOT EXISTS orders (
+  id INT,
+  user_id INT,
+  staff_id INT,
+  address_id INT,
+  order_amount DECIMAL(15, 2),
+  discount_amount DECIMAL(15, 2),
+  tax_amount DECIMAL(15, 2),
+  total_amount DECIMAL(15, 2),
+  discount_id INT,
+  payment_method_id INT,
+  payment_status_id INT,
+  order_status_id INT,
+  shipping_method_id INT,
+  shipping_status_id INT,
+  created_at DATETIME(3)
+) ENGINE = OLAP PRIMARY KEY (id, user_id) PARTITION BY RANGE (date_trunc('month', created_at)) (
+  PARTITION p1
+  VALUES LESS THAN ("2024-01-01")
+) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE _kafka_orders (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.orders",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_orders_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_orders AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  CAST(JSON_VALUE(message, '$.after.user_id') AS INT) AS user_id,
+  CAST(JSON_VALUE(message, '$.after.staff_id') AS INT) AS staff_id,
+  CAST(JSON_VALUE(message, '$.after.address_id') AS INT) AS address_id,
+  CAST(
+    JSON_VALUE(message, '$.after.order_amount') AS DECIMAL(15, 2)
+  ) AS order_amount,
+  CAST(
+    JSON_VALUE(message, '$.after.discount_amount') AS DECIMAL(15, 2)
+  ) AS discount_amount,
+  CAST(
+    JSON_VALUE(message, '$.after.tax_amount') AS DECIMAL(15, 2)
+  ) AS tax_amount,
+  CAST(
+    JSON_VALUE(message, '$.after.total_amount') AS DECIMAL(15, 2)
+  ) AS total_amount,
+  CAST(
+    JSON_VALUE(message, '$.after.discount_id') AS INT
+  ) AS discount_id,
+  CAST(
+    JSON_VALUE(message, '$.after.payment_method_id') AS INT
+  ) AS payment_method_id,
+  CAST(
+    JSON_VALUE(message, '$.after.payment_status_id') AS INT
+  ) AS payment_status_id,
+  CAST(
+    JSON_VALUE(message, '$.after.order_status_id') AS INT
+  ) AS order_status_id,
+  CAST(
+    JSON_VALUE(message, '$.after.shipping_method_id') AS INT
+  ) AS shipping_method_id,
+  CAST(
+    JSON_VALUE(message, '$.after.shipping_status_id') AS INT
+  ) AS shipping_status_id,
+  CAST(
+    JSON_VALUE(message, '$.after.created_at') AS DATETIME(3)
+  ) AS created_at
+FROM _kafka_orders;
+-- Products table ---------------------------------------------
+CREATE TABLE IF NOT EXISTS products (
+  id INT,
+  product_name STRING,
+  category_id INT,
+  brand_id INT,
+  product_price FLOAT
+) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_products (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.products",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_products_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_products AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  JSON_VALUE(message, '$.after.product_name') AS product_name,
+  CAST(
+    JSON_VALUE(message, '$.after.category_id') AS INT
+  ) AS category_id,
+  CAST(JSON_VALUE(message, '$.after.brand_id') AS INT) AS brand_id,
+  CAST(
+    JSON_VALUE(message, '$.after.product_price') AS FLOAT
+  ) AS product_price
+FROM _kafka_products;
+-- Tags table ------------------------------------------
+CREATE TABLE IF NOT EXISTS tags (id INT, tag_name STRING) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_tags (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.tags",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_tags_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_tags AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  JSON_VALUE(message, '$.after.tag_name') AS tag_name
+FROM _kafka_tags;
+-- Brands table ---------------------------------------------------
+CREATE TABLE IF NOT EXISTS brands (id INT, brand_name STRING) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_brands (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.brands",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_brands_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_brands AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  JSON_VALUE(message, '$.after.brand_name') AS brand_name
+FROM _kafka_brands;
+-- Users table -------------------------------------------------------
+CREATE TABLE IF NOT EXISTS users (
+  id INT,
+  username STRING,
+  created_at DATETIME
+) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_users (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.users",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_users_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_users AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  JSON_VALUE(message, '$.after.username') AS username,
+  CAST(
+    JSON_VALUE(message, '$.after.created_at') AS DATETIME
+  ) AS created_at
+FROM _kafka_users;
+-- roles table ------------------------------------------------
+CREATE TABLE IF NOT EXISTS roles (id INT, role_name STRING) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_roles (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.roles",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_roles_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_roles AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  JSON_VALUE(message, '$.after.role_name') AS role_name
+FROM _kafka_roles;
+-- role_user table ----------------------------------------------
+CREATE TABLE IF NOT EXISTS role_user (id INT, role_id INT, user_id INT) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_role_user (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.role_user",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_role_user_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_role_user AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  CAST(JSON_VALUE(message, '$.after.role_id') AS INT) AS role_id,
+  CAST(JSON_VALUE(message, '$.after.user_id') AS INT) AS user_id
+FROM _kafka_role_user;
+-- provinces table --------------------------------------------
+CREATE TABLE IF NOT EXISTS provinces (id INT, province_name STRING) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+-- Optional, adjust based on your needs
+CREATE TABLE IF NOT EXISTS provinces (id INT, province_name STRING) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_provinces (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.provinces",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_provinces_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_provinces AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  JSON_VALUE(message, '$.after.province_name') AS province_name
+FROM _kafka_provinces;
+-- Cities table -------------------------------------------------
+CREATE TABLE IF NOT EXISTS cities (
+  id INT,
+  city_name STRING,
+  province_id INT,
+  latitude FLOAT,
+  longitude FLOAT
+) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_cities (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.cities",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_cities_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_cities AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  JSON_VALUE(message, '$.after.city_name') AS city_name,
+  CAST(
+    JSON_VALUE(message, '$.after.province_id') AS INT
+  ) AS province_id,
+  CAST(JSON_VALUE(message, '$.after.latitude') AS FLOAT) AS latitude,
+  CAST(
+    JSON_VALUE(message, '$.after.longitude') AS FLOAT
+  ) AS longitude
+FROM _kafka_cities;
+-- Addresses table ---------------------------------------------
+CREATE TABLE IF NOT EXISTS addresses (
+  id INT,
+  title STRING,
+  user_id INT,
+  province_id INT,
+  city_id INT
+) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_addresses (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.addresses",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_addresses_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_addresses AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  JSON_VALUE(message, '$.after.title') AS title,
+  CAST(JSON_VALUE(message, '$.after.user_id') AS INT) AS user_id,
+  CAST(
+    JSON_VALUE(message, '$.after.province_id') AS INT
+  ) AS province_id,
+  CAST(JSON_VALUE(message, '$.after.city_id') AS INT) AS city_id
+FROM _kafka_addresses;
+-- Categories Table ---------------------------------------------
+CREATE TABLE IF NOT EXISTS categories (
+  id INT,
+  category_name STRING,
+  category_id INT NULL
+) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_categories (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.categories",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_categories_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_categories AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  JSON_VALUE(message, '$.after.category_name') AS category_name,
+  CAST(
+    JSON_VALUE(message, '$.after.category_id') AS INT
+  ) AS category_id
+FROM _kafka_categories;
+-- Product_Tag Table -------------------------------------
+CREATE TABLE IF NOT EXISTS product_tag (product_id INT, tag_id INT) ENGINE = OLAP PRIMARY KEY (product_id, tag_id) DISTRIBUTED BY HASH(product_id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_product_tag (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.product_tag",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_product_tag_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_product_tag AS
+SELECT CAST(JSON_VALUE(message, '$.after.product_id') AS INT) AS product_id,
+  CAST(JSON_VALUE(message, '$.after.tag_id') AS INT) AS tag_id
+FROM _kafka_product_tag;
+-- AdsCampaign Table ----------------------------------
+CREATE TABLE IF NOT EXISTS adscampaigns (id INT, campaign_title STRING) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_adscampaign (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.adscampaigns",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_adscampaigns_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_adscampaigns AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  JSON_VALUE(message, '$.after.campaign_title') AS campaign_title
+FROM _kafka_adscampaign;
+-- Discounts Table -------------------------------------------------
+CREATE TABLE IF NOT EXISTS discounts (
+  id INT,
+  adscampaign_id INT NULL,
+  type STRING,
+  value STRING,
+  code STRING,
+  started_at DATETIME(3),
+  expired_at DATETIME(3)
+) ENGINE = OLAP PRIMARY KEY (id, started_at) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+-- Optional, adjust based on your needs
+CREATE TABLE IF NOT EXISTS _kafka_discounts (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.discounts",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_discounts_consumer",
+  "format" = "json"
+);
+CREATE TABLE IF NOT EXISTS _kafka_discounts (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.discounts",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_discounts_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_discounts AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  CAST(
+    NULLIF(
+      JSON_VALUE(message, '$.after.adscampaign_id'),
+      ''
+    ) AS INT
+  ) AS adscampaign_id,
+  JSON_VALUE(message, '$.after.type') AS type,
+  JSON_VALUE(message, '$.after.value') AS value,
+  JSON_VALUE(message, '$.after.code') AS code,
+  CAST(
+    JSON_VALUE(message, '$.after.started_at') AS DATETIME(3)
+  ) AS started_at,
+  CAST(
+    JSON_VALUE(message, '$.after.expired_at') AS DATETIME(3)
+  ) AS expired_at
+FROM _kafka_discounts;
+-- OrderStatus Table -------------------------------------------
+CREATE TABLE IF NOT EXISTS orderstatus (id INT, order_status_name STRING) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_orderstatus (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.orderstatus",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_orderstatus_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_orderstatus AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  JSON_VALUE(message, '$.after.order_status_name') AS order_status_name
+FROM _kafka_orderstatus;
+-- PaymentMethods Table -------------------------------------------
+CREATE TABLE IF NOT EXISTS paymentmethods (id INT, payment_method_name STRING) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_paymentmethods (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.paymentmethods",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_paymentmethods_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_paymentmethods AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  JSON_VALUE(message, '$.after.payment_method_name') AS payment_method_name
+FROM _kafka_paymentmethods;
+-- Payment Status Table-------------------------------------
+CREATE TABLE IF NOT EXISTS paymentstatus (id INT, payment_status_name STRING) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_paymentstatus (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.paymentstatus",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_paymentstatus_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_paymentstatus AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  JSON_VALUE(message, '$.after.payment_status_name') AS payment_status_name
+FROM _kafka_paymentstatus;
+-- Shipping Status Table-------------------------------------
+CREATE TABLE IF NOT EXISTS shippingstatus (id INT, shipping_status_name STRING) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_shippingstatus (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.shippingstatus",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_shippingstatus_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_shippingstatus AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  JSON_VALUE(message, '$.after.shipping_status_name') AS shipping_status_name
+FROM _kafka_shippingstatus;
+-- Shipping Methods Table-------------------------------------
+CREATE TABLE IF NOT EXISTS shippingmethods (id INT, shipping_method_name STRING) ENGINE = OLAP PRIMARY KEY (id) DISTRIBUTED BY HASH(id) BUCKETS 10 PROPERTIES ("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_shippingmethods (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.shippingmethods",
+  "kafka_partitions" = "1",
+  "kafka_offsets" = "OFFSET_BEGINNING",
+  "kafka_group_id" = "starrocks_shippingmethods_consumer",
+  "format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_shippingmethods AS
+SELECT CAST(JSON_VALUE(message, '$.after.id') AS INT) AS id,
+  JSON_VALUE(message, '$.after.shipping_method_name') AS shipping_method_name
+FROM _kafka_shippingmethods;
+-- OrderDetails Table-------------------------------------
+CREATE TABLE IF NOT EXISTS orderdetails (
+  id INT,
+  order_id INT,
+  product_id INT,
+  quantity INT,
+  product_price DECIMAL(15, 2),
+  product_tax DECIMAL(15, 2),
+  subtotal_amount DECIMAL(15, 2),
+  created_at DATETIME(3)
+) ENGINE = OLAP DUPLICATE KEY(id) PARTITION BY RANGE(to_month(created_at)) () DISTRIBUTED BY HASH(order_id) BUCKETS 4 PROPERTIES("replication_num" = "1");
+CREATE TABLE IF NOT EXISTS _kafka_orderdetails (message STRING) ENGINE = KAFKA PROPERTIES (
+  "kafka_broker_list" = "kafka-broker:19092",
+  "kafka_topic" = "ecommerce_cdc.public.orderdetails",
+  "kafka_group_id" = "starrocks_orderdetails_consumer",
+  "kafka_format" = "json"
+);
+CREATE MATERIALIZED VIEW mv_orderdetails AS
+SELECT JSON_VALUE(message, '$.after.id') AS id,
+  JSON_VALUE(message, '$.after.order_id') AS order_id,
+  JSON_VALUE(message, '$.after.product_id') AS product_id,
+  JSON_VALUE(message, '$.after.quantity') AS quantity,
+  JSON_VALUE(message, '$.after.product_price') AS product_price,
+  JSON_VALUE(message, '$.after.product_tax') AS product_tax,
+  JSON_VALUE(message, '$.after.subtotal_amount') AS subtotal_amount
+FROM _kafka_orderdetails;
+CREATE TABLE IF NOT EXISTS _at_total_revenue_per_products (
+  p_id INT,
+  p_name STRING,
+  total_revenue FLOAT,
+  total_qty INT
+) ENGINE = OLAP AGGREGATE KEY(p_id, p_name) DISTRIBUTED BY HASH(p_id) BUCKETS 4 PROPERTIES("replication_num" = "1");
+CREATE MATERIALIZED VIEW _mv_at_total_revenue_per_products AS
+SELECT p.id AS p_id,
+  p.product_name AS p_name,
+  od.quantity AS total_qty,
+  od.subtotal_amount AS total_revenue
+FROM orders o
+  JOIN orderdetails od ON o.id = od.order_id
+  JOIN products p ON od.product_id = p.id
+  JOIN orderstatus os ON o.order_status_id = os.id
+WHERE os.order_status_name IN ('Processing', 'Shipped', 'Delivered');
+CREATE TABLE IF NOT EXISTS _at_monthly_orders_status (
+  month INT,
+  monthly_revenue SUM(DECIMAL(15, 2)),
+  avg_order_value HLL_UNION,
+  monthly_orders BITMAP_UNION
+) ENGINE = OLAP AGGREGATE KEY(month) DISTRIBUTED BY HASH(month) BUCKETS 4 PROPERTIES("replication_num" = "1");
+CREATE MATERIALIZED VIEW _mv_at_monthly_orders_status AS
+SELECT DATE_FORMAT(created_at, '%Y%m') AS month,
+  total_amount AS monthly_revenue,
+  total_amount AS avg_order_value,
+  id AS monthly_orders
+FROM orders
+WHERE order_status_id IN (
+    SELECT id
+    FROM orderstatus
+    WHERE order_status_name IN ('Processing', 'Shipped', 'Delivered')
+  );
+CREATE TABLE IF NOT EXISTS _at_daily_user_registration (day INT, registration INT SUM) ENGINE = OLAP AGGREGATE KEY(day) DISTRIBUTED BY HASH(day) BUCKETS 4 PROPERTIES ("replication_num" = "1");
+CREATE MATERIALIZED VIEW _mv_at_daily_user_registration AS
+SELECT CAST(DATE_FORMAT(created_at, '%Y%m%d') AS INT) AS day,
+  COUNT(id) AS registration
+FROM users
+GROUP BY day;
+CREATE TABLE IF NOT EXISTS _at_monthly_user_registration (month INT, registration INT SUM) ENGINE = OLAP AGGREGATE KEY(month) DISTRIBUTED BY HASH(month) BUCKETS 4 PROPERTIES ("replication_num" = "1");
+CREATE MATERIALIZED VIEW _mv_at_monthly_user_registration AS
+SELECT CAST(DATE_FORMAT(created_at, '%Y%m') AS INT) AS month,
+  COUNT(id) AS registration
+FROM users
+GROUP BY month;
+CREATE TABLE IF NOT EXISTS _at_city_orders_by_date (
+  city_name STRING,
+  date DATE,
+  order_count BITMAP_UNION
+) ENGINE = OLAP AGGREGATE KEY(date, city_name) PARTITION BY RANGE(to_month(date)) () DISTRIBUTED BY HASH(city_name) BUCKETS 4 PROPERTIES ("replication_num" = "1");
+CREATE MATERIALIZED VIEW _mv_at_city_orders_by_date AS
+SELECT c.city_name,
+  CAST(created_at AS DATE) AS date,
+  orders.id AS order_count
+FROM orders
+  JOIN addresses a ON orders.address_id = a.id
+  JOIN cities c ON a.city_id = c.id;
+CREATE TABLE IF NOT EXISTS _at_total_sales_per_category (
+  category_name STRING,
+  total_sales DECIMAL(15, 2) SUM,
+  order_count BIGINT SUM
+) ENGINE = OLAP AGGREGATE KEY(category_name) DISTRIBUTED BY HASH(category_name) BUCKETS 4 PROPERTIES ("replication_num" = "1");
+CREATE MATERIALIZED VIEW _mv_at_total_sales_per_category AS
+SELECT categories.category_name AS category_name,
+  orderdetails.subtotal_amount AS total_sales,
+  1 AS order_count
+FROM orderdetails
+  JOIN products ON orderdetails.product_id = products.id
+  JOIN categories ON products.category_id = categories.id;
+CREATE TABLE IF NOT EXISTS _at_total_sales_per_user (
+  user_id BIGINT,
+  total_amount DECIMAL(15, 2) SUM
+) ENGINE = OLAP AGGREGATE KEY(user_id) DISTRIBUTED BY HASH(user_id) BUCKETS 4 PROPERTIES ("replication_num" = "1");
+CREATE MATERIALIZED VIEW _mv_at_total_sales_per_user AS
+SELECT user_id,
+  total_amount
+FROM orders;
+CREATE TABLE IF NOT EXISTS _at_number_of_products_in_each_brand (
+  brand_name STRING,
+  product_count BIGINT SUM
+) ENGINE = OLAP AGGREGATE KEY(brand_name) DISTRIBUTED BY HASH(brand_name) BUCKETS 4 PROPERTIES ("replication_num" = "1");
+CREATE MATERIALIZED VIEW _mv_at_number_of_products_in_each_brand AS
+SELECT brands.brand_name AS brand_name,
+  1 AS product_count
+FROM products
+  JOIN brands ON products.brand_id = brands.id;
+CREATE TABLE IF NOT EXISTS _at_number_of_orders_for_each_shipping_method (
+  shipping_method_name STRING,
+  order_count BIGINT SUM
+) ENGINE = OLAP AGGREGATE KEY(shipping_method_name) DISTRIBUTED BY HASH(shipping_method_name) BUCKETS 4 PROPERTIES ("replication_num" = "1");
+CREATE MATERIALIZED VIEW _mv_at_number_of_orders_for_each_shipping_method AS
+SELECT shippingmethods.shipping_method_name AS shipping_method_name,
+  1 AS order_count
+FROM orders
+  JOIN shippingmethods ON orders.shipping_method_id = shippingmethods.id;
+CREATE TABLE IF NOT EXISTS _at_number_of_orders_for_each_payment_method (
+  payment_method_name STRING,
+  order_count BIGINT SUM
+) ENGINE = OLAP AGGREGATE KEY(payment_method_name) DISTRIBUTED BY HASH(payment_method_name) BUCKETS 4 PROPERTIES ("replication_num" = "1");
+CREATE MATERIALIZED VIEW _mv_at_number_of_orders_for_each_payment_method AS
+SELECT paymentmethods.payment_method_name AS payment_method_name,
+  1 AS order_count
+FROM orders
+  JOIN paymentmethods ON orders.payment_method_id = paymentmethods.id;
+CREATE TABLE IF NOT EXISTS _at_number_of_users_in_each_province (
+  province_name STRING,
+  user_count BIGINT SUM
+) ENGINE = OLAP AGGREGATE KEY(province_name) DISTRIBUTED BY HASH(province_name) BUCKETS 4 PROPERTIES ("replication_num" = "1");
+CREATE MATERIALIZED VIEW _mv_at_number_of_users_in_each_province AS
+SELECT provinces.province_name AS province_name,
+  1 AS user_count
+FROM users
+  JOIN addresses ON users.id = addresses.user_id
+  JOIN provinces ON addresses.province_id = provinces.id;
+CREATE TABLE IF NOT EXISTS _at_total_number_of_products_sold_by_city (city_name STRING, total_sold BIGINT SUM) ENGINE = OLAP AGGREGATE KEY(city_name) DISTRIBUTED BY HASH(city_name) BUCKETS 4 PROPERTIES ("replication_num" = "1");
+CREATE MATERIALIZED VIEW _mv_at_total_number_of_products_sold_by_city AS
+SELECT cities.city_name AS city_name,
+  orderdetails.quantity AS total_sold
+FROM orderdetails
+  JOIN orders ON orderdetails.order_id = orders.id
+  JOIN addresses ON orders.address_id = addresses.id
+  JOIN cities ON addresses.city_id = cities.id;
+
+
+--  Test
+CREATE TABLE IF NOT EXISTS users (
+  id INT NOT NULL,
+  username VARCHAR(100) NOT NULL,
+  password VARCHAR(255),
+  email VARCHAR(255) NOT NULL,
+  mobile VARCHAR(255) NOT NULL,
+  created_at DATETIME NOT NULL
+) UNIQUE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 4 PROPERTIES ("replication_num" = "1");
+

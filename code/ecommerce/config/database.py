@@ -8,12 +8,3 @@ db_config = {
     'host': os.getenv('POSTGRES_HOST'),
     'port': os.getenv('POSTGRES_PORT'),
 }
-
-# Local DB configs
-# db_config = {
-#     'dbname': 'ecommerce',
-#     'user': 'postgres',
-#     'password': 1433,
-#     'host': 'localhost',
-#     'port': '5432',
-# }

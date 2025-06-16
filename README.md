@@ -1,0 +1,4 @@
+- **Airflow UI:** `http://localhost:13005` username:`airflow`, password:`airflow`
+- **PostgreSQL:** port:`65432`, username:`postgres`, password:`postgres`
+- **Debezium UI:** `http://localhost:8085` _(authentication not required)_
+- **Kafka UI:** `http://localhost:8095/` _(authentication not required)_
