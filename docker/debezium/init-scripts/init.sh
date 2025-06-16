@@ -8,5 +8,5 @@ wget --quiet --tries=3 --output-document=/dev/null --post-file=/init-scripts/pos
 #curl -X POST -H "Content-Type: application/json" \
 #    --data @/init-scripts/postgres-connector.json http://debezium:8083/connectors
 
-# echo "Create the StarRocks connector..."
-# curl -X POST -H "Content-Type: application/json" --data @/init-scripts/starrocks-connector.json http://debezium:8083/connectors
+echo "Create the StarRocks connector..."
+curl -X POST -H "Content-Type: application/json" --data @/init-scripts/starrocks-connector.json http://debezium:8083/connectors

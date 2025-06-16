@@ -10,10 +10,14 @@
     "sink.properties.strip_outer_array": "true",
     "connect.timeoutms": "3000",
     "starrocks.topic2table.map": "ecommerce_cdc.public.users:users",
-    "transforms": "addfield,unwrap",
+    "transforms": "addfield,unwrap,convertTimestamp",
     "transforms.addfield.type": "com.starrocks.connector.kafka.transforms.AddOpFieldForDebeziumRecord",
     "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
     "transforms.unwrap.drop.tombstones": "true",
-    "transforms.unwrap.delete.handling.mode": "rewrite"
+    "transforms.unwrap.delete.handling.mode": "rewrite",
+    "transforms.convertTimestamp.type": "org.apache.kafka.connect.transforms.TimestampConverter$Value",
+    "transforms.convertTimestamp.field": "created_at",
+    "transforms.convertTimestamp.target.type": "string",
+    "transforms.convertTimestamp.format": "yyyy-MM-dd HH:mm:ss"
   }
 }
