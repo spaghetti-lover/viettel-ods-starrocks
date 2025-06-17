@@ -20,9 +20,7 @@
     "key.converter.schemas.enable": "false",
     "snapshot.mode": "initial",
     "tombstones.on.delete": "false",
-
     "time.precision.mode": "connect",
-
     "transforms": "flatten,convertTimestamp",
     "transforms.flatten.type": "org.apache.kafka.connect.transforms.Flatten$Value",
     "transforms.flatten.delimiter": ".",

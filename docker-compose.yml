@@ -243,27 +243,39 @@ services:
   starrocks:
     image: starrocks/allin1-ubuntu
     container_name: starrocks
-    hostname: starrocks
     ports:
       - "9030:9030"
       - "8030:8030"
       - "8040:8040"
       - "9031:9031"
       - "9032:9032"
-    environment:
-      - STARROCKS_FE_HOST=starrocks
-      - STARROCKS_FE_HTTP_PORT=8030
-      - STARROCKS_FE_QUERY_PORT=9030
-      - STARROCKS_BE_HOST=starrocks
-      - STARROCKS_BE_QUERY_PORT=8040
-      - STARROCKS_BE_HTTP_PORT=8040
-      - STARROCKS_BE_QUERY_PORT2=9031
-      - STARROCKS_BE_QUERY_PORT3=9032
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8030/api/system/ping"]
-      interval: 30s
-      timeout: 30s
+      test: ["CMD", "curl", "--fail", "http://localhost:8030/api/health"]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
       retries: 5
+    volumes:
+      - ./database/starrocks_tables.sql:/starrocks_tables.sql
+    networks:
+      - services
+
+  starrocks-init:
+    image: starrocks/allin1-ubuntu
+    depends_on:
+      starrocks:
+        condition: service_healthy
+    volumes:
+      - ./database/starrocks_tables.sql:/starrocks_tables.sql
+    command: >
+      /bin/sh -c '
+        until mysql -h starrocks -P 9030 -uroot -e "SHOW BACKENDS\G" | grep -q "Alive: true"; do
+          echo "Waiting for StarRocks BE to be alive...";
+          sleep 5;
+        done;
+        echo "BE ready. Executing schema...";
+        mysql -h starrocks -P 9030 -uroot < /starrocks_tables.sql
+      '
     networks:
       - services
 
